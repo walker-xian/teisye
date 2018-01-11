@@ -1,0 +1,8 @@
+LIBRARY teisye.dll
+
+EXPORTS
+    tsalloc         @1
+    tsfree          @2
+    tsrealloc       @3
+
+
