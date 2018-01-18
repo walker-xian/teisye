@@ -582,12 +582,11 @@ class heap
     };
 
     struct shared_cache : 
-#if defined(__arm__) || defined(_M_ARM)  
-        // atomic_stack_v is faster on ARM
-        heap_small<atomic_stack_v<memory_unit*>>
-#else
-        // stack_sl is faster on x86
+#if defined(__GNUC__) && defined(__x86_64__) 
+        // gcc hasn't implemented atomic_compare_exchange_16 for x86-64 yet, use spin lock version instead
         heap_small<stack_sl<memory_unit*>>
+#else
+        heap_small<atomic_stack_v<memory_unit*>>
 #endif
     {
         inline void merge(key_t key, memory_unit* head) noexcept
