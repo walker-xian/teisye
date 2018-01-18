@@ -1,13 +1,13 @@
 TARGETDIR := ./build/$(shell $(CXX) -dumpmachine)
 
-CXXFLAGS += -Wall
+CXXFLAGS += -Wall -pthread
 ifeq ($(DEBUG), 1)
-	CXXFLAGS += -g 
+	CXXFLAGS += -g -D_DEBUG
 else
-	CXXFLAGS += -Ofast
+	CXXFLAGS += -Ofast -DNDEBUG
 endif
 
-all : $(TARGETDIR) $(addprefix $(TARGETDIR)/, teisye.so heapperf)
+all : $(TARGETDIR) $(addprefix $(TARGETDIR)/, heapperf)
     
 clean:
 	rm -f $(TARGETDIR)/*
@@ -15,15 +15,18 @@ clean:
 $(TARGETDIR) :
 	mkdir -p $(TARGETDIR)
 
-$(TARGETDIR)/heapperf : $(TARGETDIR)/heapperf.o $(TARGETDIR)/teisye.so
 ifeq ($(SHARED), 1)
-	$(CXX) $(CXXFLAGS) -lpthread -o $@ $^
+$(TARGETDIR)/heapperf : $(TARGETDIR)/heapperf.o $(TARGETDIR)/teisye.so
 else
-	$(CXX) $(CXXFLAGS) -lpthread -o $@ $< src/teisye.cpp 
+$(TARGETDIR)/heapperf : $(TARGETDIR)/heapperf.o $(TARGETDIR)/teisye.o
 endif
+	$(CXX) $(CXXFLAGS) -o $@ $^ -lpthread 
 
 $(TARGETDIR)/heapperf.o : heapperf/heapperf.cpp src/teisye.h 
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
+$(TARGETDIR)/teisye.o : src/teisye.cpp src/teisye.h
+	$(CXX) $(CXXFLAGS) -fno-exceptions -c -o $@ $<
+
 $(TARGETDIR)/teisye.so : src/teisye.cpp src/teisye.h
-	$(CXX) $(CXXFLAGS) -shared -fPIC -Wl,--version-script=src/teisye.map -o $@ $<
+	$(CXX) $(CXXFLAGS) -fno-exceptions -shared -fPIC -Wl,--version-script=src/teisye.map -o $@ $<
