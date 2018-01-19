@@ -63,7 +63,7 @@ static const char _usage[]
     "Usage: [-h] [-l loop_num] [-t thread_num] [allocator_id]\n"
     "  -h               Print the usage.\n"
     "  -c case_mask     Which test cases to run, default is 0x1f, which will ran all cases.\n"
-    "  -l loop_num      The number of loops that tests will repeatedly run, default: 10.\n"
+    "  -l loop_num      The number of loops that tests will repeatedly run, default: 1.\n"
     "  thread_num       The number of threads the test will run within.\n"
     "  allocator_id     Specifies a allocator that will be tested, 0:malloc, 1:teisye, default is 0.\n"
 };
@@ -102,8 +102,8 @@ struct statistic
 typedef void* (*allocator_t)(size_t size);
 typedef void  (*deallocator_t)(void*);
 
-thread_local allocator_t _active_allocator = tsalloc;
-thread_local deallocator_t _active_deallocator = tsfree;
+thread_local allocator_t _active_allocator = ::tsalloc;
+thread_local deallocator_t _active_deallocator = ::tsfree;
 
 static statistic _default_statistic{};
 static thread_local statistic* _active_statistic{ &_default_statistic };
@@ -127,7 +127,7 @@ inline void local_dealloc(void* p) noexcept
     _active_statistic->_num_of_deallocations++;
 }
 
-void* operator new  (size_t size)
+void* operator new (size_t size)
 {
     return local_alloc(size);
 }
@@ -164,12 +164,12 @@ class application
         { "512b",   512 - 8 + 1, 1 },
         { "8kb",    1024 * 8 - 8 + 1, 1 },
         { "128kb",  1024 * 128 - 8 - sizeof(void*) * 2 + 1, 21 },
-        { "huge",   1024 * 130, 1 },
+        { "huge",   1024 * 130 - 8 - sizeof(void*) * 2 + 1, 1 },
     };
 
     allocator_id _allocator_id{ _malloc };
     int _num_of_threads{ 1 };   // number of threads that tests run in
-    int _num_of_loops{ 10 };    // number of loops that tests run
+    int _num_of_loops{ 1 };     // number of loops that tests run
     int _case_mask{ 0x1f };     // run all cases by default
 
     void test(case_statistics_t& cs) noexcept
@@ -181,53 +181,51 @@ class application
             _active_deallocator = ::free;
             break;
         case _teisye:
-            _active_allocator = tsalloc;
-            _active_deallocator = tsfree;
+            _active_allocator = ::tsalloc;
+            _active_deallocator = ::tsfree;
             break;
         default:
             assert(0);
             break;
         }
 
-        if (1 & _case_mask)
-        {
-            _active_statistic = &cs[_wc];
-            test_wc();
-        }
-
-        unique_ptr<char> allocations[8] {};
-        int pos{};
-
-        for (int tc = 1; tc < _test_case_count; ++tc)
-        {
-            if (!((1 << tc) & _case_mask)) continue;
-
-            _active_statistic = &cs[tc];
-            for (size_t size = _test_cases[tc - 1]._max_size; size < _test_cases[tc]._max_size; size += _test_cases[tc]._step)
+        for (int n = 0; n < 10; ++n)
+        {    	
+            if (1 & _case_mask)
             {
-                allocations[pos] = unique_ptr<char>(new char[size]);
-                memset(allocations[pos].get(), 0xbd, size);
+                _active_statistic = &cs[_wc];
+                test_wc();
+            }
 
-                // hold for a little while before deallocate it;
-                pos = (pos + 1) % sizeof(allocations)/sizeof(allocations[0]);
-                if (pos == 0)
+            for (int i = 1; i < _test_case_count; ++i)
+            {
+                if (!((1 << i) & _case_mask)) continue;
+
+                unique_ptr<uint8_t> allocations[8];
+                int pos{};
+
+                _active_statistic = &cs[i];
+                auto &tc = _test_cases[i];
+                for (size_t size = _test_cases[i - 1]._max_size; size < tc._max_size; size += tc._step)
                 {
-                    for (size_t i = 0; i < sizeof(allocations)/sizeof(allocations[0]); ++i)
+                    auto p = new uint8_t[size];
+                    memset(p, 0xbd, size);
+                    allocations[pos] = unique_ptr<uint8_t>(p);
+
+                    // hold a little while
+                    pos = (pos + 1) % (sizeof(allocations)/sizeof(allocations[0]));
+                    if (pos == 0)
                     {
-                        allocations[i].reset();
+                        for (auto &item : allocations) 
+                            item.reset();
                     }
                 }
             }
         }
 
-        for (size_t i = 0; i < sizeof(allocations)/sizeof(allocations[0]); ++i)
-        {
-            allocations[i].release();
-        }
-
         _active_statistic = &_default_statistic;
-        _active_allocator = tsalloc;
-        _active_deallocator = tsfree;
+        _active_allocator = ::tsalloc;
+        _active_deallocator = ::tsfree;
     }
 
     void test_wc()
