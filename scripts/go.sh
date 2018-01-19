@@ -6,7 +6,7 @@ do
     do
         for ((i = 0; i < 3; ++i)) 
         do
-            $heapperf -l 3 -t $thread $heap
+            $heapperf -c 15 -l 3 -t $thread $heap
         done
     done
 done
