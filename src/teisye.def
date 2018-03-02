@@ -4,5 +4,4 @@ EXPORTS
     tsalloc         @1
     tsfree          @2
     tsrealloc       @3
-
-
+    tshook          @4

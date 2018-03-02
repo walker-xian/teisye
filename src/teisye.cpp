@@ -403,16 +403,6 @@ class slabs
     atomic_stack <slab_t*>   _slabs;
 
 public:
-    ~slabs() noexcept
-    {
-        for (auto s = _slabs.top(); s;)
-        {
-            auto next = s->_next;
-            delete s;
-            s = next;
-        }
-    }
-
     inline unit_t* alloc(size_t size)  noexcept
     {
         assert(adjust_size(size) == size);
@@ -753,4 +743,19 @@ extern "C" void* tsrealloc(void* ptr, size_t size)
     return _heap.realloc(ptr, size);
 }
 
+extern "C" bool tsvalidate(const void* ptr)
+{
+    using namespace teisye;
+    if (!ptr) return false;
+    auto unit = reinterpret_cast<memory_unit*>(reinterpret_cast<size_t>(ptr) - sizeof(memory_unit::header));
+    return _heap.validate(unit);
+}
 
+extern "C" size_t tssize(const void* ptr)
+{
+    using namespace teisye;
+    if (!ptr) return static_cast<size_t>(-1);
+    auto unit = reinterpret_cast<memory_unit*>(reinterpret_cast<size_t>(ptr) - sizeof(memory_unit::header));
+    if (!_heap.validate(unit)) return static_cast<size_t>(-1);
+    return unit->_header._size;
+}
