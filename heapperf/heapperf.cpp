@@ -1,7 +1,6 @@
 /* Copyright (C) 2010 Daiqian Huang <daiqian.huang@outlook.com>
  *
- * heapperf is free software; you can redistribute it and/or modify it 
- * under the terms of the MIT License.
+ * The software is free, you can redistribute it and/or modify it under the terms of the MIT License.
  */
  
  /** 
@@ -260,7 +259,7 @@ public:
             else if (arg == "-c")
             {
                 if (!args[++i]) throw runtime_error("-c missing a number");
-                _case_mask = stoi(args[i]);
+                _case_mask = strtol(args[i], nullptr, 0);
                 if (_case_mask <= 0) throw runtime_error("-c invalid number");
             }
             else if (arg == "-l")
@@ -361,10 +360,6 @@ int main(int argc, char **argv)
 
         app.parse_args(argc, argv);
         app.run();
-    }
-    catch (const std::bad_alloc&)
-    {
-        cerr << "out of memory" << endl;
     }
     catch (const std::exception& e)
     {

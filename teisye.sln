@@ -1,7 +1,7 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio 15
-VisualStudioVersion = 15.0.27004.2006
+VisualStudioVersion = 15.0.27130.2027
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "teisye", "src\teisye.vcxproj", "{6D5D1B12-BD7E-4CB2-9A98-D9DD82B383D0}"
 EndProject
@@ -10,9 +10,9 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "heapperf", "heapperf\heappe
 		{6D5D1B12-BD7E-4CB2-9A98-D9DD82B383D0} = {6D5D1B12-BD7E-4CB2-9A98-D9DD82B383D0}
 	EndProjectSection
 EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{3BE2A795-2D81-4EBF-BD53-802D052AB81C}"
-	ProjectSection(SolutionItems) = preProject
-		makefile = makefile
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "tsinject", "tsinject\tsinject.vcxproj", "{9CEF7951-A5A4-4C00-94E8-213C2F31C74B}"
+	ProjectSection(ProjectDependencies) = postProject
+		{6D5D1B12-BD7E-4CB2-9A98-D9DD82B383D0} = {6D5D1B12-BD7E-4CB2-9A98-D9DD82B383D0}
 	EndProjectSection
 EndProject
 Global
@@ -39,6 +39,14 @@ Global
 		{18C79F13-893B-4F69-974C-2D504111E1EE}.Release|x64.Build.0 = Release|x64
 		{18C79F13-893B-4F69-974C-2D504111E1EE}.Release|x86.ActiveCfg = Release|Win32
 		{18C79F13-893B-4F69-974C-2D504111E1EE}.Release|x86.Build.0 = Release|Win32
+		{9CEF7951-A5A4-4C00-94E8-213C2F31C74B}.Debug|x64.ActiveCfg = Debug|x64
+		{9CEF7951-A5A4-4C00-94E8-213C2F31C74B}.Debug|x64.Build.0 = Debug|x64
+		{9CEF7951-A5A4-4C00-94E8-213C2F31C74B}.Debug|x86.ActiveCfg = Debug|Win32
+		{9CEF7951-A5A4-4C00-94E8-213C2F31C74B}.Debug|x86.Build.0 = Debug|Win32
+		{9CEF7951-A5A4-4C00-94E8-213C2F31C74B}.Release|x64.ActiveCfg = Release|x64
+		{9CEF7951-A5A4-4C00-94E8-213C2F31C74B}.Release|x64.Build.0 = Release|x64
+		{9CEF7951-A5A4-4C00-94E8-213C2F31C74B}.Release|x86.ActiveCfg = Release|Win32
+		{9CEF7951-A5A4-4C00-94E8-213C2F31C74B}.Release|x86.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
