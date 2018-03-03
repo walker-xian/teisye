@@ -31,5 +31,7 @@
 *.out
 *.app
 
-# build directory
+# misc
 build*/
+.vs/
+*.user
