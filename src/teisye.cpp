@@ -1,7 +1,6 @@
 /* Copyright (C) 2010 Daiqian Huang <daiqian.huang@outlook.com>
  *
- * teisye is free software; you can redistribute it and/or modify it 
- * under the terms of the MIT License.
+ * The software is free, you can redistribute it and/or modify it under the terms of the MIT License.
  */
  
 /**
@@ -39,19 +38,28 @@ namespace teisye
 {
 using namespace std;
 
-inline size_t adjust_size(size_t size) noexcept
+constexpr size_t _alignment = 8;
+
+inline bool is_aligned(size_t size) noexcept
 {
-    return (size + alignof(void*)-1) & (~((alignof(void*)-1)));
+    return !(size & (_alignment - 1));
+}
+
+inline bool is_aligned(const void* ptr) noexcept
+{
+    return is_aligned(reinterpret_cast<size_t>(ptr));
 }
 
 template<typename T>
-inline T adjust_pointer(const void* ptr, size_t delta = 0) noexcept
+inline T align(const void* ptr, size_t increament) noexcept
 {
-    return reinterpret_cast<T>(adjust_size(reinterpret_cast<size_t>(ptr) + delta));
+    return reinterpret_cast<T>((reinterpret_cast<size_t>(ptr) + increament + _alignment - 1) & (~(_alignment - 1)));
 }
 
 inline size_t pointer_diff(const void *right, const void *left) noexcept
 {
+    is_aligned(right);
+    is_aligned(left);
     return reinterpret_cast<size_t>(right) - reinterpret_cast<size_t>(left);
 }
 
@@ -381,7 +389,8 @@ struct slab_base
 
     inline slab_base() noexcept
     {
-        _last = adjust_pointer<unit_t*>(this, _slab_size);
+        _last = align<unit_t*>(this, _slab_size - _alignment + 1);
+        assert(reinterpret_cast<size_t>(_last) <= reinterpret_cast<size_t>(this) + _slab_size);
     }
 
     void* operator new(size_t)
@@ -405,9 +414,7 @@ class slabs
 public:
     inline unit_t* alloc(size_t size)  noexcept
     {
-        assert(adjust_size(size) == size);
-
-        unit_t *unit{};
+         unit_t *unit{};
         for (auto s = _slabs.top(); s; s = s->_next)
         {
             unit = s->alloc(size);
@@ -461,7 +468,7 @@ class heap_large
 
         inline large_slab() noexcept
         {
-            _first = adjust_pointer<unit_t*>(this, sizeof(*this));
+            _first = align<unit_t*>(this, sizeof(*this));
             _first->_owner = nullptr;
             _first->_right = _last;
 
@@ -471,30 +478,39 @@ class heap_large
 
         inline unit_t*  alloc(size_t size) noexcept
         {
-            assert(adjust_size(size) == size);
-
-            if (size > _free_size || _busy.test_and_set()) return nullptr;
-
             unit_t *chunk{};
+            size_t aligned_size = (size + sizeof(*chunk) + _alignment - 1) & (~(_alignment - 1));
+
+            assert(is_aligned(aligned_size));
+            assert(aligned_size >= size + sizeof(*chunk));
+
+            if (aligned_size > _free_size || _busy.test_and_set()) return nullptr;
+
             for (auto cur = _first; cur < _last; cur = cur->_right)
             {
+                assert(is_aligned(cur));
+
                 // the unit is not free
                 if (cur->_owner) continue;
 
                 // merge free units
                 for (auto right = cur->_right; right < _last && !right->_owner; right = right->_right)
                 {
+                    assert(is_aligned(right));
                     cur->_right = right->_right;
                 }
                 assert(cur->_right > _first && cur->_right <= _last);
 
                 auto free_size = pointer_diff(cur->_right, cur);
-                if (size > free_size) continue;
+                if (aligned_size > free_size) continue;
 
-                // if the remaining size is equal or greater 128 bytes, split it
-                if (free_size - size >= 128)
+                // if the remaining size is equal or greater than 128 bytes, split it
+                if (free_size - aligned_size >= 128)
                 {
-                    auto split = adjust_pointer<unit_t*>(cur, size);
+                    auto split = align<unit_t*>(cur, aligned_size);
+                    assert(is_aligned(split));
+                    assert(reinterpret_cast<size_t>(split) - reinterpret_cast<size_t>(cur) == aligned_size);
+                    assert(split < _last);
                     split->_owner = nullptr;
                     split->_right = cur->_right;
                     cur->_right = split;
@@ -503,12 +519,16 @@ class heap_large
                 chunk = cur;
                 chunk->_owner = this;
 
+                assert(is_aligned(chunk));
+                assert(is_aligned(chunk->_right));
+                assert(pointer_diff(chunk->_right, chunk) >= size + sizeof(*chunk));
+                
                 _free_size.fetch_sub(pointer_diff(chunk->_right, chunk));
                 break;
             }
 
             _busy.clear();
-
+            
             return chunk;
         }
 
@@ -525,8 +545,7 @@ class heap_large
 public:
     inline memory_unit* alloc(size_t size) noexcept
     {
-        auto adjusted_size = adjust_size(size + sizeof(large_unit));
-        large_unit* chunk = _slabs.alloc(adjusted_size);
+        large_unit* chunk = _slabs.alloc(size);
         if (chunk)
         {
             return reinterpret_cast<memory_unit*>(&chunk->_unit);
@@ -537,7 +556,7 @@ public:
 
     inline void free(memory_unit* unit) noexcept
     {
-        auto chunk = adjust_pointer<large_unit*>(unit, sizeof(large_unit::_unit)) - 1;
+        auto chunk = reinterpret_cast<large_unit*>(reinterpret_cast<size_t>(unit) + sizeof(large_unit::_unit)) - 1;
         chunk->_owner->free(chunk);
     }
 };
@@ -551,22 +570,23 @@ class heap
 
         inline slab() noexcept
         {
-            _current = _first = adjust_pointer<unit_t*>(this, sizeof(*this));
+            _current = _first = align<unit_t*>(this, sizeof(*this));
         }
 
         inline unit_t* alloc(size_t size) noexcept
         {
-            assert(adjust_size(size) == size);
+            assert(is_aligned(size));
 
             unit_t *ptr = _current;
             unit_t *next;
             do
             {
-                next = adjust_pointer<unit_t*>(ptr, size);
+                next = align<unit_t*>(ptr, size);
                 if (next >= _last) return nullptr;
             }
             while (!_current.compare_exchange_weak(ptr, next));
 
+            assert(is_aligned(ptr));
             return ptr;
         }
     };
@@ -642,8 +662,7 @@ public:
         }
         else
         {
-            size_t adjusted_size = adjust_size(size + sizeof(memory_unit::header));
-            assert(adjusted_size >= size);
+            size_t adjusted_size = size + sizeof(memory_unit::header);
             unit = reinterpret_cast<memory_unit*>(::malloc(adjusted_size));
         }
 

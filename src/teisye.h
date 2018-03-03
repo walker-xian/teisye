@@ -1,7 +1,6 @@
 /* Copyright (C) 2010 Daiqian Huang <daiqian.huang@outlook.com>
  *
- * teisye is free software; you can redistribute it and/or modify it 
- * under the terms of the MIT License.
+ * The software is free, you can redistribute it and/or modify it under the terms of the MIT License.
  */
 
 /**
