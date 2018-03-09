@@ -38,7 +38,7 @@ namespace teisye
 {
 using namespace std;
 
-constexpr size_t _alignment = 8;
+constexpr size_t _alignment = sizeof(void*) * 2;
 
 inline bool is_aligned(size_t size) noexcept
 {
@@ -50,16 +50,19 @@ inline bool is_aligned(const void* ptr) noexcept
     return is_aligned(reinterpret_cast<size_t>(ptr));
 }
 
+inline size_t align(size_t size) noexcept
+{
+    return (size + _alignment - 1) & (~(_alignment - 1));
+}
+
 template<typename T>
 inline T align(const void* ptr, size_t increament) noexcept
 {
-    return reinterpret_cast<T>((reinterpret_cast<size_t>(ptr) + increament + _alignment - 1) & (~(_alignment - 1)));
+    return reinterpret_cast<T>(align(reinterpret_cast<size_t>(ptr) + increament));
 }
 
 inline size_t pointer_diff(const void *right, const void *left) noexcept
 {
-    is_aligned(right);
-    is_aligned(left);
     return reinterpret_cast<size_t>(right) - reinterpret_cast<size_t>(left);
 }
 
@@ -379,6 +382,8 @@ struct memory_unit
     memory_unit* _next;
 };
 
+static_assert(sizeof(memory_unit::header) == 8, "the size of memory_unit::header must be 8");
+
 template<typename U, size_t Val>
 struct slab_base
 {
@@ -389,10 +394,9 @@ struct slab_base
 
     inline slab_base() noexcept
     {
-        _last = align<unit_t*>(this, _slab_size - _alignment + 1);
-        assert(reinterpret_cast<size_t>(_last) <= reinterpret_cast<size_t>(this) + _slab_size);
+        _last = reinterpret_cast<unit_t*>(reinterpret_cast<size_t>(this) + _slab_size);
     }
-
+    
     void* operator new(size_t)
     {
         return ::malloc(_slab_size);
@@ -414,7 +418,7 @@ class slabs
 public:
     inline unit_t* alloc(size_t size)  noexcept
     {
-         unit_t *unit{};
+        unit_t *unit{};
         for (auto s = _slabs.top(); s; s = s->_next)
         {
             unit = s->alloc(size);
@@ -468,7 +472,7 @@ class heap_large
 
         inline large_slab() noexcept
         {
-            _first = align<unit_t*>(this, sizeof(*this));
+            _first = reinterpret_cast<unit_t*>(align<char*>(this, sizeof(*this)) + _alignment - sizeof(memory_unit::header));
             _first->_owner = nullptr;
             _first->_right = _last;
 
@@ -479,24 +483,18 @@ class heap_large
         inline unit_t*  alloc(size_t size) noexcept
         {
             unit_t *chunk{};
-            size_t aligned_size = (size + sizeof(*chunk) + _alignment - 1) & (~(_alignment - 1));
-
-            assert(is_aligned(aligned_size));
-            assert(aligned_size >= size + sizeof(*chunk));
+            size_t aligned_size = align(size + sizeof(*chunk));
 
             if (aligned_size > _free_size || _busy.test_and_set()) return nullptr;
 
             for (auto cur = _first; cur < _last; cur = cur->_right)
             {
-                assert(is_aligned(cur));
-
                 // the unit is not free
                 if (cur->_owner) continue;
 
                 // merge free units
                 for (auto right = cur->_right; right < _last && !right->_owner; right = right->_right)
                 {
-                    assert(is_aligned(right));
                     cur->_right = right->_right;
                 }
                 assert(cur->_right > _first && cur->_right <= _last);
@@ -507,10 +505,7 @@ class heap_large
                 // if the remaining size is equal or greater than 128 bytes, split it
                 if (free_size - aligned_size >= 128)
                 {
-                    auto split = align<unit_t*>(cur, aligned_size);
-                    assert(is_aligned(split));
-                    assert(reinterpret_cast<size_t>(split) - reinterpret_cast<size_t>(cur) == aligned_size);
-                    assert(split < _last);
+                    auto split = reinterpret_cast<unit_t*>(reinterpret_cast<size_t>(cur) + aligned_size);
                     split->_owner = nullptr;
                     split->_right = cur->_right;
                     cur->_right = split;
@@ -519,8 +514,6 @@ class heap_large
                 chunk = cur;
                 chunk->_owner = this;
 
-                assert(is_aligned(chunk));
-                assert(is_aligned(chunk->_right));
                 assert(pointer_diff(chunk->_right, chunk) >= size + sizeof(*chunk));
                 
                 _free_size.fetch_sub(pointer_diff(chunk->_right, chunk));
@@ -563,6 +556,12 @@ public:
 
 class heap
 {
+    struct huge_unit
+    {
+        void *_raw_ptr; // for alignment;
+        memory_unit::header _unit;
+    };
+
     struct slab : slab_base<memory_unit, 1024 * 1024>
     {
         slab* _next{};
@@ -570,7 +569,7 @@ class heap
 
         inline slab() noexcept
         {
-            _current = _first = align<unit_t*>(this, sizeof(*this));
+            _current = _first = reinterpret_cast<unit_t*>(align<char*>(this, sizeof(*this)) + _alignment - sizeof(memory_unit::header));
         }
 
         inline unit_t* alloc(size_t size) noexcept
@@ -581,12 +580,11 @@ class heap
             unit_t *next;
             do
             {
-                next = align<unit_t*>(ptr, size);
+                next = reinterpret_cast<unit_t*>(reinterpret_cast<size_t>(ptr) + size);
                 if (next >= _last) return nullptr;
             }
             while (!_current.compare_exchange_weak(ptr, next));
 
-            assert(is_aligned(ptr));
             return ptr;
         }
     };
@@ -662,8 +660,15 @@ public:
         }
         else
         {
-            size_t adjusted_size = size + sizeof(memory_unit::header);
-            unit = reinterpret_cast<memory_unit*>(::malloc(adjusted_size));
+            size_t adjusted_size = size + sizeof(huge_unit) + sizeof(huge_unit::_raw_ptr);
+            void *raw_ptr = ::malloc(adjusted_size);
+            if (raw_ptr)
+            {
+                auto hu = align<huge_unit*>(raw_ptr, sizeof(huge_unit)) - 1;
+                assert(hu >= raw_ptr);
+                hu->_raw_ptr = raw_ptr;
+                unit = reinterpret_cast<memory_unit*>(&hu->_unit);
+            }
         }
 
         assert(unit);
@@ -673,6 +678,7 @@ public:
             unit->_header._signature = _unit_signature;
             unit->_header._key = key;
             unit->_header._idle = false;
+            assert(is_aligned(&unit->_next));
             assert(validate(unit));
             return &unit->_next;
         }
@@ -705,7 +711,8 @@ public:
         }
         else
         {
-            ::free(unit);
+            auto hu = reinterpret_cast<huge_unit*>(reinterpret_cast<size_t>(unit) - sizeof(huge_unit::_raw_ptr));
+            ::free(hu->_raw_ptr);
         }
     }
 
