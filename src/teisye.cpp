@@ -79,11 +79,6 @@ class stack
     node_t _head{};
 
 public:
-    inline node_t top() const noexcept
-    {
-        return _head;
-    }
-
     inline void push(node_t node) noexcept
     {
         node->_next = _head;
@@ -95,6 +90,13 @@ public:
         node_t node = _head;
         if (node) _head = node->_next;
         return node;
+    }
+
+    inline node_t pop_all() noexcept
+    {
+        node_t node = _head;
+        _head = nullptr;
+        return node; 
     }
 };
 
@@ -173,14 +175,6 @@ public:
 
         return node;
     }
-
-    // pop node if it is the head
-    inline bool pop(node_t node) noexcept
-    {
-        if (node != _head)  return false;
-
-        return _head.compare_exchange_weak(node, node->_next);
-    }
 };
 
 template<typename T>
@@ -251,7 +245,7 @@ public:
 
 enum : size_t
 {
-    max_small_size = 512, max_medium_size = 1024 * 8, max_large_size = 1024 * 128
+    max_small_size = 512, max_medium_size = 1024 * 8, max_large_size = 1024 * 1024
 };
 using key_t = int8_t;
 
@@ -373,6 +367,7 @@ public:
         return _key_max_large;
     }
 };
+size_book _book;
 
 struct memory_unit
 {
@@ -615,18 +610,41 @@ class heap
 
     struct thread_cache : heap_small<stack<memory_unit*>>
     {
+        using base_t = heap_small<stack<memory_unit*>>;
+        enum : size_t { _limit = 1024 * 512 };
+        size_t _used{};
+
         ~thread_cache() noexcept
+        {
+            flush();
+        }
+
+        inline void flush() noexcept
         {
             for (key_t key = 0; key < size_book::count(); ++key)
             {
-                _shared_cache.merge(key, _hashmap[key].top());
+                _shared_cache.merge(key, _hashmap[key].pop_all());
             }
+            _used = 0;
+        }
+
+        inline memory_unit* alloc(key_t key) noexcept
+        {
+            auto unit = base_t::alloc(key); 
+            if (unit) _used -= _book.value(key);
+            return unit;
+        }
+
+        inline void free(memory_unit *unit) noexcept
+        {
+            base_t::free(unit);
+            _used += _book.value(unit->_header._key);
+            if (_used > _limit) flush();
         }
     };
     static thread_local thread_cache _thread_cache;
 
     enum : uint16_t { _unit_signature = 0x6871 };
-    size_book _book;
     slabs<slab, memory_unit> _slabs;
     heap_large _large;
 

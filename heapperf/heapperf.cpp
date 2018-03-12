@@ -162,8 +162,8 @@ class application
         { "wc",     0, 1 },
         { "512b",   512 - 8 + 1, 1 },
         { "8kb",    1024 * 8 - 8 + 1, 1 },
-        { "128kb",  1024 * 128 - 8 - sizeof(void*) * 2 + 1, 8 * 2 + 1 },
-        { "huge",   1024 * 130 - 8 - sizeof(void*) * 2 + 1, 1 },
+        { "1mb",    1024 * 1024 - 8 - sizeof(void*) * 2 + 1, 8 * 16 + 1 },
+        { "huge",   1024 * 1026 - 8 - sizeof(void*) * 2 + 1, 1 },
     };
 
     allocator_id _allocator_id{ _malloc };
