@@ -46,7 +46,7 @@ invalidated and any access to it is undefined behavior.
 On failure, returns a null pointer. The original pointer ptr remains valid and may need to be
 deallocated with free() or realloc().
 */
-void* tsrealloc(void* ptr, size_t newSize);
+void* tsrealloc(void* ptr, size_t size);
 
 #if defined(_WIN32)
 /* tshook

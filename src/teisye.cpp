@@ -34,6 +34,12 @@ DllMain(HMODULE, DWORD, LPVOID)
 #include <algorithm>
 #include "teisye.h"
 
+// assert on windows show a message box, which is not very helpful. use __debugbreak() instead
+#if defined(_WIN32) && defined(_DEBUG) && !defined(NDEBUG)
+#undef assert
+#define assert(exp)      if (!(exp)) { __debugbreak(); }
+#endif
+
 namespace teisye
 {
 using namespace std;
@@ -742,9 +748,9 @@ public:
 
     inline bool validate(const memory_unit* unit) noexcept
     {
-        if (unit->_header._signature != _unit_signature) return false;
-        assert(unit->_header._key == _book.key(unit->_header._size + sizeof(unit->_header)));
-        return true;
+        return (unit->_header._signature == _unit_signature) && 
+               (unit->_header._key == _book.key(unit->_header._size + sizeof(unit->_header)));
+
     }
 };
 

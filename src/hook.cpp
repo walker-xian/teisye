@@ -23,6 +23,7 @@
 #include <cassert>
 #include <algorithm>
 #include <atomic>
+#include <limits>
 #include "teisye.h"
 
 extern "C" bool tsvalidate(const void* ptr);
@@ -30,6 +31,8 @@ extern "C" size_t tssize(const void* ptr);
 
 namespace hook
 {
+    using namespace std;
+
 #if defined(_DEBUG) || !defined(NDEBUG)
     inline void debug_printf(const char* format, ...) noexcept
     {
@@ -58,14 +61,16 @@ namespace hook
         return reinterpret_cast<T>(reinterpret_cast<char*>(ptr) + delta);
     }
 
-    typedef LPVOID  (WINAPI *HeapAlloc_t)(HANDLE win32Heap, DWORD flags, SIZE_T size);
-    typedef BOOL    (WINAPI *HeapFree_t)(HANDLE win32Heap, DWORD flags, void* ptr);
-    typedef LPVOID  (WINAPI *HeapReAlloc_t)(HANDLE win32Heap, DWORD flags, void* ptr, SIZE_T size);
-    typedef SIZE_T  (WINAPI *HeapSize_t)(HANDLE win32Heap, DWORD flags, const void* ptr);
-    typedef BOOL    (WINAPI *HeapValidate_t)(HANDLE win32Heap, DWORD flags, const void* ptr);
+    typedef LPVOID  (WINAPI *HeapAlloc_t)(HANDLE win32_heap, DWORD flags, SIZE_T size);
+    typedef BOOL    (WINAPI *HeapFree_t)(HANDLE win32_heap, DWORD flags, void* ptr);
+    typedef LPVOID  (WINAPI *HeapReAlloc_t)(HANDLE win32_heap, DWORD flags, void* ptr, SIZE_T size);
+    typedef SIZE_T  (WINAPI *HeapSize_t)(HANDLE win32_heap, DWORD flags, const void* ptr);
+    typedef BOOL    (WINAPI *HeapValidate_t)(HANDLE win32_heap, DWORD flags, const void* ptr);
 
     typedef HMODULE(WINAPI *LoadLibraryExW_t)(LPCWSTR libname, HANDLE file, DWORD flags);
     typedef HMODULE(WINAPI *LoadLibraryExA_t)(LPCSTR libname, HANDLE file, DWORD flags);
+
+    typedef BOOL(WINAPI *EnumProcessModules_t)(HANDLE hProcess, HMODULE *lphModule, DWORD cb, LPDWORD lpcbNeeded);
 
     struct origin_proc
     {
@@ -76,100 +81,149 @@ namespace hook
         HeapValidate_t   _HeapValidate;
         LoadLibraryExW_t _LoadLibraryExW;
         LoadLibraryExA_t _LoadLibraryExA;
+        EnumProcessModules_t _EnumProcessModules;
     } _origin;
+        
+    constexpr int _max_modules{ 512 };
+    HMODULE _patched_modules[_max_modules]{};
+    int _patched_modules_count{};
 
+    atomic<uint64_t> _num_of_allocations{};
+    atomic<uint64_t> _num_of_deallocations{};
 
-    void* WINAPI HeapAlloc(HANDLE, DWORD flags, size_t size) noexcept
+    void* WINAPI HeapAlloc(HANDLE win32_heap, DWORD flags, size_t size) noexcept
     {
-        void *ptr = tsalloc(size);
-        if (ptr && (flags & HEAP_ZERO_MEMORY))
+        if (flags & (~(HEAP_NO_SERIALIZE | HEAP_ZERO_MEMORY | HEAP_CREATE_ENABLE_EXECUTE)))
         {
-            memset(ptr, 0, size);
+            // there are some special flags, let the default to do the job
+            return _origin._HeapAlloc(win32_heap, flags, size);
+        } 
+
+        void *ptr = tsalloc(size);
+        if (ptr)
+        {
+            if (flags & HEAP_ZERO_MEMORY)
+            {
+                memset(ptr, 0, size);
+            }
+
+            // assume heap was created with HEAP_CREATE_ENABLE_EXECUTE
+            MEMORY_BASIC_INFORMATION mbi;
+            VirtualQuery(ptr, &mbi, sizeof(mbi));
+            if (!(mbi.Protect & PAGE_EXECUTE_READWRITE))
+            {
+                VirtualProtect(mbi.BaseAddress, mbi.RegionSize, PAGE_EXECUTE_READWRITE, &mbi.Protect);
+            }
+
+            _num_of_allocations.fetch_add(1);
         }
+
         return ptr;
     }
 
-    BOOL WINAPI HeapFree(HANDLE win32Heap, DWORD flags, void* ptr) noexcept
+    BOOL WINAPI HeapFree(HANDLE win32_heap, DWORD flags, void* ptr) noexcept
     {
-        if (!tsvalidate(ptr)) return _origin._HeapFree(win32Heap, flags, ptr);
+        if (!tsvalidate(ptr)) return _origin._HeapFree(win32_heap, flags, ptr);
+
         tsfree(ptr);
+        _num_of_deallocations.fetch_add(1);
         return true;
     }
 
-    void* WINAPI HeapReAlloc(HANDLE win32Heap, DWORD flags, void* ptr, size_t size) noexcept
+    void* WINAPI HeapReAlloc(HANDLE win32_heap, DWORD flags, void* ptr, size_t size) noexcept
     {
-        if (!tsvalidate(ptr)) return _origin._HeapReAlloc(win32Heap, flags, ptr, size);
+        if (!tsvalidate(ptr)) return _origin._HeapReAlloc(win32_heap, flags, ptr, size);
 
-        void *new_ptr = tsrealloc(ptr, size);
-        if (new_ptr && (flags & HEAP_ZERO_MEMORY))
+        // unsupported flags are specified, e.g:HEAP_REALLOC_IN_PLACE_ONLY, let the caller to deal with it
+        if (flags & (~(HEAP_ZERO_MEMORY | HEAP_NO_SERIALIZE | HEAP_CREATE_ENABLE_EXECUTE))) return nullptr;
+
+        size_t old_size = tssize(ptr);
+        void *new_ptr = tsalloc(size);
+        if (new_ptr)
         {
-            memset(new_ptr, 0, size);
+            if (flags & HEAP_ZERO_MEMORY)
+            {
+                memset(new_ptr, 0, size);
+            }
+
+            // assume heap was created with HEAP_CREATE_ENABLE_EXECUTE
+            MEMORY_BASIC_INFORMATION mbi;
+            VirtualQuery(new_ptr, &mbi, sizeof(mbi));
+            if (!(mbi.Protect & PAGE_EXECUTE_READWRITE))
+            {
+                VirtualProtect(mbi.BaseAddress, mbi.RegionSize, PAGE_EXECUTE_READWRITE, &mbi.Protect);
+            }
+
+            memcpy(new_ptr, ptr, std::min(old_size, size));
+            tsfree(ptr);
+
+           _num_of_allocations.fetch_add(1);
+           _num_of_deallocations.fetch_add(1);
         }
+
         return new_ptr;
     }
 
-    size_t WINAPI HeapSize(HANDLE win32Heap, DWORD flags, const void* ptr) noexcept
+    size_t WINAPI HeapSize(HANDLE win32_heap, DWORD flags, const void* ptr) noexcept
     {
-        if (!tsvalidate(ptr)) return _origin._HeapSize(win32Heap, flags, ptr);
-
-        return tssize(ptr);
+        return tsvalidate(ptr) ? tssize(ptr) : _origin._HeapSize(win32_heap, flags, ptr);
     }
 
-    BOOL WINAPI HeapValidate(HANDLE win32Heap, DWORD flags, const void* ptr) noexcept
+    BOOL WINAPI HeapValidate(HANDLE win32_heap, DWORD flags, const void* ptr) noexcept
     {
-        if (!tsvalidate(ptr)) return _origin._HeapValidate(win32Heap, flags, ptr);
-
-        return true;
+        return tsvalidate(ptr) ? true : _origin._HeapValidate(win32_heap, flags, ptr);
     }
 
-    void patch_all_modules();
+    void patch_all_modules() noexcept;
 
-    HMODULE WINAPI LoadLibraryExW(LPCWSTR libname, HANDLE file, DWORD flags)
+    HMODULE WINAPI LoadLibraryExW(LPCWSTR libname, HANDLE file, DWORD flags) noexcept
     {
         HMODULE m = _origin._LoadLibraryExW(libname, file, flags);
         patch_all_modules();
         return m;
     }
 
-    HMODULE WINAPI LoadLibraryExA(LPCSTR libname, HANDLE file, DWORD flags)
+    HMODULE WINAPI LoadLibraryExA(LPCSTR libname, HANDLE file, DWORD flags) noexcept
     {
         HMODULE m = _origin._LoadLibraryExA(libname, file, flags);
         patch_all_modules();
         return m;
     }
 
-    struct specification
+    const void* find_hook_proc(const char* proc_name) noexcept
     {
-        const char* _proc_name;
-        const void* _hook_proc;
-    };
-
-    inline const specification* find_specification(const char* proc_name) noexcept
-    {
-        static const specification heap_specifications[] =
+        static const struct
         {
-            { "HeapAlloc",    HeapAlloc },
-            { "HeapFree",     HeapFree },
-            { "HeapReAlloc",  HeapReAlloc },
-            { "HeapSize",     HeapSize },
-            { "HeapValidate", HeapValidate },
+            const char* _proc_name;
+            const void* _hook_proc;
+        }
+        lookup_table[] =
+        {
+            { "HeapAlloc",          HeapAlloc },
+            { "HeapFree",           HeapFree },
+            { "HeapReAlloc",        HeapReAlloc },
+            { "HeapSize",           HeapSize },
+            { "HeapValidate",       HeapValidate },
 
-            //{ "RtlAllocateHeap",    HeapAlloc },
+            { "RtlAllocateHeap",    HeapAlloc },
             { "RtlFreeHeap",        HeapFree },
             { "RtlReAllocateHeap",  HeapReAlloc },
             { "RtlSizeHeap",        HeapSize },
             { "RtlValidateHeap",    HeapValidate },
             
-            { "LoadLibraryExW", LoadLibraryExW },
-            { "LoadLibraryExA", LoadLibraryExA },
+            { "LoadLibraryExW",     LoadLibraryExW },
+            { "LoadLibraryExA",     LoadLibraryExA },
         };
-        auto it = std::find_if(std::begin(heap_specifications), std::end(heap_specifications),
-            [proc_name](const specification& it) { return _stricmp(proc_name, it._proc_name) == 0; });
 
-        return it != std::end(heap_specifications) ? it : nullptr;
+        for (const auto &it : lookup_table)
+        {
+            if (_stricmp(proc_name, it._proc_name) == 0) return it._hook_proc;
+        }
+
+        return nullptr;
     }
 
-    void patch_module_iat(HMODULE module)
+    void patch_module_iat(HMODULE module, bool hook_RtlAllocateHeap) noexcept
     {
         if (!module) return;
 
@@ -188,13 +242,10 @@ namespace hook
 
             auto module_name = pointer_cast<PCSTR>(dos_header, descriptor->Name);
 
-            static const char *modules_to_hook[] = { "ntdll.dll", "kernel32.dll", "api-ms-win-core-heap", "api-ms-win-core-libraryloader" };
-            auto it = std::find_if(std::begin(modules_to_hook), std::end(modules_to_hook),
+            static const char *filter[] = { "ntdll.dll", "kernel32.dll", "api-ms-win-core-heap", "api-ms-win-core-libraryloader" };
+            auto it = std::find_if(std::begin(filter), std::end(filter),
                                     [module_name](const auto& it) { return _strnicmp(module_name, it, strlen(it)) == 0; });
-            if (it == std::end(modules_to_hook))
-            {
-                continue;
-            }
+            if (it == std::end(filter)) continue;
 
             auto thunk = pointer_cast<PIMAGE_THUNK_DATA>(dos_header, descriptor->FirstThunk);
             auto origThunk = pointer_cast<PIMAGE_THUNK_DATA>(dos_header, descriptor->OriginalFirstThunk);
@@ -205,16 +256,14 @@ namespace hook
 
                 auto proc = pointer_cast<PIMAGE_IMPORT_BY_NAME>(dos_header, origThunk->u1.AddressOfData);
                 auto proc_name = reinterpret_cast<PSTR>(proc->Name);
-                auto specification = find_specification(proc_name);
-                if (!specification)  continue;
+                if (!hook_RtlAllocateHeap && (_stricmp(proc_name, "RtlAllocateHeap") == 0)) continue;
+                auto hook_proc = find_hook_proc(proc_name);
+                if (!hook_proc)  continue;
 
-                if (thunk->u1.Function == reinterpret_cast<DWORD_PTR>(specification->_hook_proc))
-                {
-                    // already patched
-                    return;
-                }
+                // already patched
+                if (thunk->u1.Function == reinterpret_cast<DWORD_PTR>(hook_proc)) return;
 
-                debug_printf("  [%s!%s] %p -> %p\n", module_name, proc_name, thunk->u1.Function, specification->_hook_proc);
+                debug_printf("  [%s!%s] %p -> %p\n", module_name, proc_name, thunk->u1.Function, hook_proc);
 
                 // Make page writable.
                 MEMORY_BASIC_INFORMATION mbi;
@@ -224,7 +273,7 @@ namespace hook
                     VirtualProtect(mbi.BaseAddress, mbi.RegionSize, PAGE_EXECUTE_READWRITE, &mbi.Protect);
                 }
 
-                thunk->u1.Function = reinterpret_cast<DWORD_PTR>(specification->_hook_proc);
+                thunk->u1.Function = reinterpret_cast<DWORD_PTR>(hook_proc);
             }
         }
 
@@ -237,75 +286,127 @@ namespace hook
 #endif
     }
 
-    typedef BOOL(WINAPI *EnumProcessModules_t)(HANDLE hProcess, HMODULE *lphModule, DWORD cb, LPDWORD lpcbNeeded);
-
-    HMODULE _psapi{};
-    EnumProcessModules_t _EnumProcessModules{};
-    std::atomic_flag  _patching{};  // prevent patching in multi-threads
-    
-    void patch_all_modules()
+    void patch_all_modules() noexcept
     {
-        if (_patching.test_and_set()) return; 
+        static atomic_flag patching{};  // prevent from patching in multi-threads
 
-        static const char* exclude_dlls[]{"teisye.dll", "ntdll.dll", "psapi.dll", "COMCTL32.dll"};
-        HMODULE exclude_modules[_countof(exclude_dlls)];
+        if (patching.test_and_set()) return;
 
-        for (int i = 0; i < _countof(exclude_dlls); ++i)
-        {
-            exclude_modules[i] = GetModuleHandleA(exclude_dlls[i]);
-        }
-
-        HMODULE modules[256];
+        HMODULE loaded_modules[_max_modules];
         DWORD cb = 0;
-        if (_EnumProcessModules(GetCurrentProcess(), modules, sizeof(modules), &cb))
+        if (_origin._EnumProcessModules(GetCurrentProcess(), loaded_modules, sizeof(loaded_modules), &cb))
         {
-            for (int i = 0; i < static_cast<int>(cb / sizeof(modules[0])); ++i)
+            int loaded_count = static_cast<int>(std::min(static_cast<size_t>(cb), sizeof(loaded_modules)) / sizeof(loaded_modules[0]));
+
+            // remove unloaded modules from _patched_modules, and remove patched module from loaded_modules
+            int unloaded_count = 0;
+            for (int i = 0; i < _patched_modules_count; ++i)
             {
-                auto m = modules[i];
-				auto it = std::find_if(std::begin(exclude_modules), std::end(exclude_modules),
-										[m](const auto& it) { return it == m; });
-				if (it == std::end(exclude_modules))
-				{
-                    patch_module_iat(m);
+                bool unloaded{ true };
+                for (int j = 0; j < loaded_count; ++j)
+                {
+                    if (loaded_modules[j] == _patched_modules[i])
+                    {
+                        // already patched
+                        loaded_modules[j] = nullptr;
+                        unloaded = false;
+                    }
+                }
+
+                if (unloaded)
+                {
+                    _patched_modules[i] = nullptr;
+                    unloaded_count++;
+                }
+            }
+
+            if (unloaded_count)
+            {
+                // pack _patched_modules
+                for (int i = 0, j = 1; j < _patched_modules_count; )
+                {
+                    if (_patched_modules[i])
+                    {
+                        ++i;
+                        j = i + 1;
+                    }
+                    else if (!_patched_modules[j])
+                    {
+                        ++j;
+                    }
+                    else
+                    {
+                        _patched_modules[i++] = _patched_modules[j];
+                        _patched_modules[j++] = nullptr;
+                    }
+                    assert(i < j);
+                }
+                _patched_modules_count -= unloaded_count;
+            }
+
+            for (int i = 0; i < loaded_count; ++i)
+            {
+                auto m = loaded_modules[i];
+                if (m)
+                {
+                    patch_module_iat(m, true);
+
+                    if (_patched_modules_count - 1 < _countof(_patched_modules))
+                    {
+                        _patched_modules[_patched_modules_count++] = m;
+                    }
                 }
             }
         }
 
-        _patching.clear();
+        patching.clear();
     }
 
     bool start() noexcept
     {
-        _psapi = LoadLibraryA("psapi.dll");
-        if (!_psapi)
-        {
-            assert(!"failed to load psapi.dll");
-            return false;
-        }
-
-        _EnumProcessModules = reinterpret_cast<EnumProcessModules_t>(::GetProcAddress(_psapi, "EnumProcessModules"));
-        if (!_EnumProcessModules)
-        {
-            assert(!"failed to get the address of EnumProcessModules");
-            return false;
-        }
+        HMODULE m = GetModuleHandleA("teisye.dll");
+        if (!m) return false;
+        // do not patch teisye.dll
+        _patched_modules[_patched_modules_count++] = m;
         
-         // Heap APIs
-        HMODULE m = GetModuleHandleA("ntdll.dll");
+        m = LoadLibraryA("psapi.dll");
+        if (!m) return false;
+        _origin._EnumProcessModules = reinterpret_cast<EnumProcessModules_t>(::GetProcAddress(m, "EnumProcessModules"));
+
+        // Heap APIs
+        m = GetModuleHandleA("ntdll.dll");
         if (!m) return false;
         _origin._HeapAlloc = reinterpret_cast<HeapAlloc_t>(GetProcAddress(m, "RtlAllocateHeap"));
         _origin._HeapFree = reinterpret_cast<HeapFree_t>(GetProcAddress(m, "RtlFreeHeap"));
         _origin._HeapReAlloc = reinterpret_cast<HeapReAlloc_t>(GetProcAddress(m, "RtlReAllocateHeap"));
         _origin._HeapSize = reinterpret_cast<HeapSize_t>(GetProcAddress(m, "RtlSizeHeap"));
         _origin._HeapValidate = reinterpret_cast<HeapValidate_t>(GetProcAddress(m, "RtlValidateHeap"));
+        // do not patch ntdll.dll
+        _patched_modules[_patched_modules_count++] = m;
 
-        // LoadLibrary APIs
-        m = GetModuleHandleA("kernelbase.dll");
+        // Locate LoadLibrary APIs of kernel32.dll
+        m = GetModuleHandleA("kernel32.dll");
         if (!m) return false;
         _origin._LoadLibraryExW = reinterpret_cast<LoadLibraryExW_t>(GetProcAddress(m, "LoadLibraryExW"));
         _origin._LoadLibraryExA = reinterpret_cast<LoadLibraryExA_t>(GetProcAddress(m, "LoadLibraryExA"));
 
-        // if a procedure address is nullptr, return false
+        // Patch kernel32.dll without hooking RtlAllocateHeap
+         patch_module_iat(m, false);
+        _patched_modules[_patched_modules_count++] = m;
+
+        // Locate LoadLibrary APIs of kernelbase.dll if kernelbase.dll is loaded
+        m = GetModuleHandleA("kernelbase.dll");
+        if (m)
+        {
+            _origin._LoadLibraryExW = reinterpret_cast<LoadLibraryExW_t>(GetProcAddress(m, "LoadLibraryExW"));
+            _origin._LoadLibraryExA = reinterpret_cast<LoadLibraryExA_t>(GetProcAddress(m, "LoadLibraryExA"));
+
+            // Patch kernelbase.dll without hooking RtlAllocateHeap
+            patch_module_iat(m, false);
+            _patched_modules[_patched_modules_count++] = m;
+        }
+
+        // if any procedure address is nullptr, return false
         const void** begin = reinterpret_cast<const void**>(&_origin);
         const void** end = begin + sizeof(_origin) / sizeof(_origin._HeapAlloc);
         for (auto it = begin; it != end; ++it)
