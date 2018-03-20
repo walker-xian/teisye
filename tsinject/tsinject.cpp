@@ -18,6 +18,8 @@
 #include <strstream>
 #include "../src/teisye.h"
 
+TEISYE_NEW_OPERATORS
+
 struct Params;
 
 typedef HMODULE (WINAPI *LoadLibraryA_t)(LPCSTR lpFileName);
@@ -57,14 +59,13 @@ using namespace std;
 
 void inject(DWORD pid)
 {
-    ostringstream oss;
-
     Params  local_params{ {}, ::LoadLibraryA, ::GetProcAddress, "tshook" };
     const size_t code_size = reinterpret_cast<size_t>(remote_proc_end) - reinterpret_cast<size_t>(remote_proc);
     if (code_size > sizeof(local_params._code))
     {
-        oss << "code buffer(" << code_size << ") is too small";
-        throw runtime_error(oss.str());    
+        ostringstream err;
+        err << "code buffer(" << code_size << ") is too small";
+        throw runtime_error(err.str());    
     }
 
     memset(local_params._code, 0x90, sizeof(local_params._code));
@@ -73,21 +74,24 @@ void inject(DWORD pid)
     HMODULE teisye = GetModuleHandleA("teisye.dll");
     if (!teisye)
     {
-        oss << "Failed to load teisye.dll, gle = " << GetLastError();
-        throw runtime_error(oss.str());
+        ostringstream err;
+        err << "Failed to load teisye.dll, gle = " << GetLastError();
+        throw runtime_error(err.str());
     }
 
     if (!GetModuleFileNameA(teisye, local_params._teisye_dll, _countof(local_params._teisye_dll)))
     {
-        oss << "Failed to retrieve the fully qualified path for teisye.dll, gle = " << GetLastError();
-        throw runtime_error(oss.str());
+        ostringstream err;
+        err << "Failed to retrieve the fully qualified path for teisye.dll, gle = " << GetLastError();
+        throw runtime_error(err.str());
     }
 
     HANDLE remote_process = OpenProcess(PROCESS_CREATE_THREAD|PROCESS_QUERY_INFORMATION|PROCESS_VM_OPERATION|PROCESS_VM_WRITE|PROCESS_VM_READ , FALSE, pid);
     if (!remote_process)
     {
-        oss << "Failed to open the process " << pid << ", gle = " << GetLastError();
-        throw runtime_error(oss.str());
+        ostringstream err;
+        err << "Failed to open the process " << pid << ", gle = " << GetLastError();
+        throw runtime_error(err.str());
     }
 
     Params *remote_params = reinterpret_cast<Params*>(VirtualAllocEx(remote_process, 0, sizeof(Params), MEM_COMMIT, PAGE_EXECUTE_READWRITE));
@@ -95,8 +99,9 @@ void inject(DWORD pid)
     {
         CloseHandle(remote_process);
 
-        oss << "Failed to allocate a memory block in the target process, gle = " << GetLastError();
-        throw runtime_error(oss.str());
+        ostringstream err;
+        err << "Failed to allocate a memory block in the target process, gle = " << GetLastError();
+        throw runtime_error(err.str());
     }
 
     if (!WriteProcessMemory(remote_process, remote_params, &local_params, sizeof(local_params), NULL))
@@ -104,8 +109,9 @@ void inject(DWORD pid)
         VirtualFreeEx(remote_process, remote_params, 0, MEM_RELEASE);
         CloseHandle(remote_process);
 
-        oss << "Failed to write date to the memory block in the target process, gle = " << GetLastError();
-        throw runtime_error(oss.str());
+        ostringstream err;
+        err << "Failed to write date to the memory block in the target process, gle = " << GetLastError();
+        throw runtime_error(err.str());
     }
 
 	// Start execution of remoteProc
@@ -115,8 +121,9 @@ void inject(DWORD pid)
         VirtualFreeEx(remote_process, remote_params, 0, MEM_RELEASE);
         CloseHandle(remote_process);
 
-        oss << "Failed to create a remote thread, gle = " << GetLastError();
-        throw runtime_error(oss.str());
+        ostringstream err;
+        err << "Failed to create a remote thread, gle = " << GetLastError();
+        throw runtime_error(err.str());
     }
 
 	WaitForSingleObject(remote_thread, INFINITE);
@@ -132,9 +139,9 @@ long int to_value(const string& str)
     long int value = strtol(str.c_str(), &end, 0);
     if (end && *end == 0) return value;
 
-    ostringstream oss;
-    oss << "parameter '" << str << "' is invalid value";
-    throw runtime_error(oss.str());
+    ostringstream err;
+    err << "parameter '" << str << "' is invalid value";
+    throw runtime_error(err.str());
 }
 
 int main(int argc, char **argv)
@@ -144,8 +151,8 @@ int main(int argc, char **argv)
     try
     {
         static const char usage[] =
-            "Inject teisye.dll into a process and invoke tshook(). debug mode should be enabled by running 'bcdedit /debug on' at a admin command box\n\n"
-            "Usage: pid \n"
+            "Inject teisye.dll into a process and invoke tshook(). debug mode should be enabled by 'bcdedit /debug on'\n"
+            "Usage: tsinject pid \n"
             "  pid      The process ID to be injected into.\n";
 
         if (argc < 2) throw runtime_error("Missing parameters\n");

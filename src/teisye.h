@@ -60,3 +60,11 @@ void tshook();
 #if defined(__cplusplus)
 }
 #endif // defined(cplusplus)
+
+#if defined(__cplusplus)
+#define TEISYE_NEW_OPERATORS    \
+    void* operator new (size_t size)    { return tsalloc(size);}    \
+    void* operator new[](size_t size)   { return tsalloc(size);}    \
+    void operator delete(void* ptr)     { tsfree(ptr); }            \
+    void operator delete[](void* ptr)   { tsfree(ptr); }
+#endif  // defined(cplusplus)
