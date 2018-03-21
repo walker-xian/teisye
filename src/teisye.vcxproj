@@ -26,7 +26,12 @@
     <None Include="teisye.def" />
   </ItemGroup>
   <ItemGroup>
-    <ResourceCompile Include="teisye.rc" />
+    <ResourceCompile Include="teisye.rc">
+      <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Release|x64'">BUILD_NUMBER=0$(BUILD_NUMBER);_UNICODE;UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">BUILD_NUMBER=0$(BUILD_NUMBER);_UNICODE;UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">BUILD_NUMBER=0$(BUILD_NUMBER);_UNICODE;UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">BUILD_NUMBER=0$(BUILD_NUMBER);_UNICODE;UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ResourceCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="teisye.h" />
