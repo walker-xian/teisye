@@ -88,8 +88,25 @@ namespace hook
     HMODULE _patched_modules[_max_modules]{};
     int _patched_modules_count{};
 
-    atomic<uint64_t> _num_of_allocations{};
-    atomic<uint64_t> _num_of_deallocations{};
+    class statistic
+    {
+        atomic<uint64_t> _num_of_allocations{};
+        atomic<uint64_t> _num_of_deallocations{};
+    public:
+        inline void alloc() noexcept
+        {
+#if defined(_DEBUG) && !defined(NDEBUG)
+            ++_num_of_allocations;
+#endif
+        }
+
+        inline void free() noexcept
+        {
+#if defined(_DEBUG) && !defined(NDEBUG)
+            ++_num_of_deallocations;
+#endif
+        }
+    } _statistic;
 
     void* WINAPI HeapAlloc(HANDLE win32_heap, DWORD flags, size_t size) noexcept
     {
@@ -107,15 +124,7 @@ namespace hook
                 memset(ptr, 0, size);
             }
 
-            // assume heap was created with HEAP_CREATE_ENABLE_EXECUTE
-            MEMORY_BASIC_INFORMATION mbi;
-            VirtualQuery(ptr, &mbi, sizeof(mbi));
-            if (!(mbi.Protect & PAGE_EXECUTE_READWRITE))
-            {
-                VirtualProtect(mbi.BaseAddress, mbi.RegionSize, PAGE_EXECUTE_READWRITE, &mbi.Protect);
-            }
-
-            _num_of_allocations.fetch_add(1);
+            _statistic.alloc();
         }
 
         return ptr;
@@ -126,7 +135,7 @@ namespace hook
         if (!tsvalidate(ptr)) return _origin._HeapFree(win32_heap, flags, ptr);
 
         tsfree(ptr);
-        _num_of_deallocations.fetch_add(1);
+        _statistic.free();
         return true;
     }
 
@@ -146,19 +155,11 @@ namespace hook
                 memset(new_ptr, 0, size);
             }
 
-            // assume heap was created with HEAP_CREATE_ENABLE_EXECUTE
-            MEMORY_BASIC_INFORMATION mbi;
-            VirtualQuery(new_ptr, &mbi, sizeof(mbi));
-            if (!(mbi.Protect & PAGE_EXECUTE_READWRITE))
-            {
-                VirtualProtect(mbi.BaseAddress, mbi.RegionSize, PAGE_EXECUTE_READWRITE, &mbi.Protect);
-            }
-
             memcpy(new_ptr, ptr, std::min(old_size, size));
             tsfree(ptr);
 
-           _num_of_allocations.fetch_add(1);
-           _num_of_deallocations.fetch_add(1);
+            _statistic.alloc();
+            _statistic.free();
         }
 
         return new_ptr;
@@ -362,8 +363,58 @@ namespace hook
         patching.clear();
     }
 
+    // apply HEAP_CREATE_ENABLE_EXECUTE to the process heap, so apps like devenv.exe may execute code from memory allocated.
+    bool process_heap_executable() noexcept
+    {
+        // the layout of Flags member is same as ntdll!_HEAP
+        struct PARTIAL_WIN32_HEAP
+        {
+            void* Entry[2];
+            ULONG SegmentSignature;
+            ULONG SegmentFlags;
+            LIST_ENTRY SegmentListEntry;
+            PARTIAL_WIN32_HEAP* Heap;
+            PVOID BaseAddress;
+            ULONG NumberOfPages;
+            void* FirstEntry;
+            void* LastValidEntry;
+            ULONG NumberOfUnCommittedPages;
+            ULONG NumberOfUnCommittedRanges;
+            WORD SegmentAllocatorBackTraceIndex;
+            WORD Reserved;
+            LIST_ENTRY UCRSegmentList;
+            ULONG Flags;
+        };
+        
+        HANDLE process_heap = GetProcessHeap();
+        if (!HeapLock(process_heap)) return false;
+
+        auto heap = reinterpret_cast<PARTIAL_WIN32_HEAP*>(process_heap);
+        heap->Flags |= HEAP_CREATE_ENABLE_EXECUTE;
+
+        // change existing regions with PAGE_EXECUTE_READWRITE protection
+        PROCESS_HEAP_ENTRY entry{};
+        while (HeapWalk(process_heap, &entry))
+        {
+            if (entry.wFlags & PROCESS_HEAP_REGION)
+            {
+                MEMORY_BASIC_INFORMATION mbi{};
+                VirtualQuery(entry.lpData, &mbi, sizeof(mbi));
+                VirtualProtect(entry.lpData, entry.cbData, PAGE_EXECUTE_READWRITE, &mbi.Protect);
+            }
+        }
+
+        HeapUnlock(process_heap);
+        return true;
+    }
+
     bool start() noexcept
     {
+        // already started
+        if (_origin._EnumProcessModules) return true;
+
+        if (!process_heap_executable()) return false;
+
         HMODULE m = GetModuleHandleA("teisye.dll");
         if (!m) return false;
         // do not patch teisye.dll
