@@ -61,16 +61,23 @@ namespace hook
         return reinterpret_cast<T>(reinterpret_cast<char*>(ptr) + delta);
     }
 
+    template<typename T>
+    inline void get_proc(HMODULE m, const char* name, T& proc) noexcept
+    {
+        void* address = GetProcAddress(m, name);
+        if (address) proc = reinterpret_cast<T>(address);
+    }
+
     typedef LPVOID  (WINAPI *HeapAlloc_t)(HANDLE win32_heap, DWORD flags, SIZE_T size);
     typedef BOOL    (WINAPI *HeapFree_t)(HANDLE win32_heap, DWORD flags, void* ptr);
     typedef LPVOID  (WINAPI *HeapReAlloc_t)(HANDLE win32_heap, DWORD flags, void* ptr, SIZE_T size);
     typedef SIZE_T  (WINAPI *HeapSize_t)(HANDLE win32_heap, DWORD flags, const void* ptr);
     typedef BOOL    (WINAPI *HeapValidate_t)(HANDLE win32_heap, DWORD flags, const void* ptr);
 
-    typedef HMODULE(WINAPI *LoadLibraryExW_t)(LPCWSTR libname, HANDLE file, DWORD flags);
-    typedef HMODULE(WINAPI *LoadLibraryExA_t)(LPCSTR libname, HANDLE file, DWORD flags);
+    typedef HMODULE (WINAPI *LoadLibraryExW_t)(LPCWSTR libname, HANDLE file, DWORD flags);
+    typedef HMODULE (WINAPI *LoadLibraryExA_t)(LPCSTR libname, HANDLE file, DWORD flags);
 
-    typedef BOOL(WINAPI *EnumProcessModules_t)(HANDLE hProcess, HMODULE *lphModule, DWORD cb, LPDWORD lpcbNeeded);
+    typedef BOOL    (WINAPI *EnumProcessModules_t)(HANDLE hProcess, HMODULE *lphModule, DWORD cb, LPDWORD lpcbNeeded);
 
     struct origin_proc
     {
@@ -117,16 +124,12 @@ namespace hook
         } 
 
         void *ptr = tsalloc(size);
-        if (ptr)
+        if (ptr && (flags & HEAP_ZERO_MEMORY))
         {
-            if (flags & HEAP_ZERO_MEMORY)
-            {
-                memset(ptr, 0, size);
-            }
-
-            _statistic.alloc();
+            memset(ptr, 0, size);
         }
 
+        _statistic.alloc();
         return ptr;
     }
 
@@ -193,35 +196,35 @@ namespace hook
 
     const void* find_hook_proc(const char* proc_name) noexcept
     {
-        static const struct
+        static const struct item
         {
             const char* _proc_name;
             const void* _hook_proc;
         }
         lookup_table[] =
         {
+            // must be sorted by _proc_name
             { "HeapAlloc",          HeapAlloc },
             { "HeapFree",           HeapFree },
             { "HeapReAlloc",        HeapReAlloc },
             { "HeapSize",           HeapSize },
             { "HeapValidate",       HeapValidate },
 
+            { "LoadLibraryExA",     LoadLibraryExA },
+            { "LoadLibraryExW",     LoadLibraryExW },
+
             { "RtlAllocateHeap",    HeapAlloc },
             { "RtlFreeHeap",        HeapFree },
             { "RtlReAllocateHeap",  HeapReAlloc },
             { "RtlSizeHeap",        HeapSize },
             { "RtlValidateHeap",    HeapValidate },
-            
-            { "LoadLibraryExW",     LoadLibraryExW },
-            { "LoadLibraryExA",     LoadLibraryExA },
         };
 
-        for (const auto &it : lookup_table)
-        {
-            if (_stricmp(proc_name, it._proc_name) == 0) return it._hook_proc;
-        }
+        item key{ proc_name };
+        auto it = std::bsearch(&key, lookup_table, _countof(lookup_table), sizeof(lookup_table[0]),
+            [](const void *a, const void* b) { return strcmp(reinterpret_cast<const item*>(a)->_proc_name, reinterpret_cast<const item*>(b)->_proc_name); });
 
-        return nullptr;
+        return (it) ? reinterpret_cast<item*>(it)->_hook_proc : nullptr;
     }
 
     void patch_module_iat(HMODULE module, bool hook_RtlAllocateHeap) noexcept
@@ -366,7 +369,8 @@ namespace hook
     // apply HEAP_CREATE_ENABLE_EXECUTE to the process heap, so apps like devenv.exe may execute code from memory allocated.
     bool process_heap_executable() noexcept
     {
-        // the layout of Flags member is same as ntdll!_HEAP
+        // partially copied from http://www.nirsoft.net/kernel_struct/vista/HEAP.html, with a little modifition. 
+        // the layout of Flags member is same as ntdll!_HEAP on Windows 8.1
         struct PARTIAL_WIN32_HEAP
         {
             void* Entry[2];
@@ -415,46 +419,31 @@ namespace hook
 
         if (!process_heap_executable()) return false;
 
-        HMODULE m = GetModuleHandleA("teisye.dll");
-        if (!m) return false;
-        // do not patch teisye.dll
-        _patched_modules[_patched_modules_count++] = m;
-        
-        m = LoadLibraryA("psapi.dll");
-        if (!m) return false;
-        _origin._EnumProcessModules = reinterpret_cast<EnumProcessModules_t>(::GetProcAddress(m, "EnumProcessModules"));
+        HMODULE psapi = LoadLibraryA("psapi.dll");
+        if (!psapi) return false;
+        get_proc(psapi, "EnumProcessModules", _origin._EnumProcessModules);
 
         // Heap APIs
-        m = GetModuleHandleA("ntdll.dll");
-        if (!m) return false;
-        _origin._HeapAlloc = reinterpret_cast<HeapAlloc_t>(GetProcAddress(m, "RtlAllocateHeap"));
-        _origin._HeapFree = reinterpret_cast<HeapFree_t>(GetProcAddress(m, "RtlFreeHeap"));
-        _origin._HeapReAlloc = reinterpret_cast<HeapReAlloc_t>(GetProcAddress(m, "RtlReAllocateHeap"));
-        _origin._HeapSize = reinterpret_cast<HeapSize_t>(GetProcAddress(m, "RtlSizeHeap"));
-        _origin._HeapValidate = reinterpret_cast<HeapValidate_t>(GetProcAddress(m, "RtlValidateHeap"));
-        // do not patch ntdll.dll
-        _patched_modules[_patched_modules_count++] = m;
+        HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+        if (!ntdll) return false;
+        get_proc(ntdll, "RtlAllocateHeap", _origin._HeapAlloc);
+        get_proc(ntdll, "RtlFreeHeap", _origin._HeapFree);
+        get_proc(ntdll, "RtlReAllocateHeap", _origin._HeapReAlloc);
+        get_proc(ntdll, "RtlSizeHeap", _origin._HeapSize);
+        get_proc(ntdll, "RtlValidateHeap", _origin._HeapValidate);
 
         // Locate LoadLibrary APIs of kernel32.dll
-        m = GetModuleHandleA("kernel32.dll");
-        if (!m) return false;
-        _origin._LoadLibraryExW = reinterpret_cast<LoadLibraryExW_t>(GetProcAddress(m, "LoadLibraryExW"));
-        _origin._LoadLibraryExA = reinterpret_cast<LoadLibraryExA_t>(GetProcAddress(m, "LoadLibraryExA"));
-
-        // Patch kernel32.dll without hooking RtlAllocateHeap
-         patch_module_iat(m, false);
-        _patched_modules[_patched_modules_count++] = m;
+        HMODULE kernel32 = GetModuleHandleA("kernel32.dll");
+        if (!kernel32) return false;
+        get_proc(kernel32, "LoadLibraryExW", _origin._LoadLibraryExW);
+        get_proc(kernel32, "LoadLibraryExA", _origin._LoadLibraryExA);
 
         // Locate LoadLibrary APIs of kernelbase.dll if kernelbase.dll is loaded
-        m = GetModuleHandleA("kernelbase.dll");
-        if (m)
+        HMODULE kernelbase = GetModuleHandleA("kernelbase.dll");
+        if (kernelbase)
         {
-            _origin._LoadLibraryExW = reinterpret_cast<LoadLibraryExW_t>(GetProcAddress(m, "LoadLibraryExW"));
-            _origin._LoadLibraryExA = reinterpret_cast<LoadLibraryExA_t>(GetProcAddress(m, "LoadLibraryExA"));
-
-            // Patch kernelbase.dll without hooking RtlAllocateHeap
-            patch_module_iat(m, false);
-            _patched_modules[_patched_modules_count++] = m;
+            get_proc(kernelbase, "LoadLibraryExW", _origin._LoadLibraryExW);
+            get_proc(kernelbase, "LoadLibraryExA", _origin._LoadLibraryExA);
         }
 
         // if any procedure address is nullptr, return false
@@ -465,6 +454,18 @@ namespace hook
             if (!*it) return false;
         }
         
+        // mark teisye.dll, ntdll.dll kernelbase.dll and kernel32.dll as already patched.
+        HMODULE teisye = GetModuleHandleA("teisye.dll");
+        if (!teisye) return false;
+        _patched_modules[_patched_modules_count++] = teisye;
+        _patched_modules[_patched_modules_count++] = ntdll;
+        _patched_modules[_patched_modules_count++] = kernelbase;
+        _patched_modules[_patched_modules_count++] = kernel32;
+
+        // Patch kernelbase.dll and kernel32.dll without hooking RtlAllocateHeap
+        patch_module_iat(kernelbase, false);
+        patch_module_iat(kernel32, false);
+
         patch_all_modules();
 
         return true;
