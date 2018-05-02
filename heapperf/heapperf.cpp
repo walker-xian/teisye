@@ -15,6 +15,7 @@
 #define _ENABLE_ATOMIC_ALIGNMENT_FIX
 #include <windows.h>
 #include <psapi.h>
+#include <intrin.h>
 #else
 #include <sys/time.h>
 #include <sys/resource.h>
@@ -72,8 +73,8 @@ using namespace std::chrono;
 
 struct statistic
 {
-    nanoseconds _allocations_cost{};
-    nanoseconds _deallocations_cost{};
+    uint64_t _allocations_cost{};
+    uint64_t _deallocations_cost{};
     int _num_of_allocations{};
     int _num_of_deallocations{};
 
@@ -87,14 +88,14 @@ struct statistic
         return *this;
     }
 
-    int64_t average_allocation_cost() const noexcept
+    uint64_t average_allocation_cost() const noexcept
     {
-        return _num_of_allocations ? (_allocations_cost / _num_of_allocations).count() : 0;
+        return _num_of_allocations ? (_allocations_cost / _num_of_allocations) : 0;
     }
 
-    int64_t average_deallocation_cost() const noexcept
+    uint64_t average_deallocation_cost() const noexcept
     {
-        return  _num_of_deallocations ? (_deallocations_cost / _num_of_deallocations).count() : 0;
+        return  _num_of_deallocations ? (_deallocations_cost / _num_of_deallocations) : 0;
     }
 };
 
@@ -107,11 +108,67 @@ thread_local deallocator_t _active_deallocator = ::tsfree;
 static statistic _default_statistic{};
 static thread_local statistic* _active_statistic{ &_default_statistic };
 
+// use the technique from https://www.intel.com/content/dam/www/public/us/en/documents/white-papers/ia-32-ia-64-benchmark-code-execution-paper.pdf
+// to read processor tsc 
+inline uint64_t benchmark_start() noexcept
+{
+#if defined(__GNUC__) && (defined(__x86__) || defined(__x86_64__))
+	uint32_t cycles_high, cycles_low;
+	asm volatile (
+        "xor %%eax, %%eax\n\t"
+		"CPUID\n\t"/*serialize*/
+		"RDTSC\n\t"/*read the clock*/
+		"mov %%edx, %0\n\t"
+		"mov %%eax, %1\n\t": "=r" (cycles_high), "=r" (cycles_low):: 
+#if defined(__x86_64__)
+		"%rax", "%rbx", "%rcx", "%rdx"
+#else
+		"%ax", "%bx", "%cx", "%dx"
+#endif
+		);
+	return (static_cast<uint64_t>(cycles_high) << 32) | cycles_low;
+#elif defined(_WIN32)
+	int cpuInfo[4];
+	__cpuid(cpuInfo, 0);
+	return __rdtsc();
+#else
+	return high_resolution_clock::now().time_since_epoch().count();
+#endif
+}
+
+inline uint64_t benchmark_end() noexcept
+{
+#if defined(__GNUC__) && (defined(__x86__) || defined(__x86_64__))
+	uint32_t cycles_high, cycles_low;
+	asm volatile(
+        "RDTSCP\n\t"
+		"mov %%edx, %0\n\t"
+		"mov %%eax, %1\n\t"
+        "xor %%eax, %%eax\n\t"
+		"CPUID\n\t": "=r" (cycles_high), "=r" (cycles_low)::
+#if defined(__x86_64__)
+		"%rax", "%rbx", "%rcx", "%rdx"
+#else
+		"%ax", "%bx", "%cx", "%dx"
+#endif
+		);
+	return (static_cast<uint64_t>(cycles_high) << 32) | cycles_low;
+#elif defined(_WIN32)
+	uint32_t aux;
+	uint64_t tsc = __rdtscp(&aux);
+	int cpuInfo[4];
+	__cpuid(cpuInfo, 0);
+	return tsc;
+#else
+	return high_resolution_clock::now().time_since_epoch().count();
+#endif
+}
+
 inline void* local_alloc(size_t size) noexcept
 {
-    auto start = high_resolution_clock::now();
+    auto start = benchmark_start();
     void* p = _active_allocator(size);
-    auto end = high_resolution_clock::now();
+    auto end = benchmark_end();
     _active_statistic->_allocations_cost += end - start;
     _active_statistic->_num_of_allocations++;
     return p;
@@ -119,9 +176,9 @@ inline void* local_alloc(size_t size) noexcept
 
 inline void local_dealloc(void* p) noexcept
 {
-    auto start = high_resolution_clock::now();
+    auto start = benchmark_start();
     _active_deallocator(p);
-    auto end = high_resolution_clock::now();
+    auto end = benchmark_end();
     _active_statistic->_deallocations_cost += end - start;
     _active_statistic->_num_of_deallocations++;
 }
@@ -171,8 +228,29 @@ class application
     int _num_of_loops{ 1 };     // number of loops that tests run
     int _case_mask{ 0x1f };     // run all cases by default
 
-    void test(case_statistics_t& cs) noexcept
+    void test(case_statistics_t& cs, int core) noexcept
     {
+		// bind current thread to one core, thus, don't have to sync TSC among cores.
+		int errcode{};
+#if defined(_WIN32)
+		if (!SetThreadAffinityMask(GetCurrentThread(), 1ULL << core))
+		{
+			errcode = GetLastError();
+		}
+#else
+		cpu_set_t cpuset;
+		CPU_ZERO(&cpuset);
+		CPU_SET(core, &cpuset); 
+		errcode = pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset);
+#endif
+		if (errcode)
+		{
+			cerr << "Failed to bind current thread to core #" << core << ", errcode=" << errcode << endl;
+			return;
+		}
+		// ensure current thread will run on desired core.
+		this_thread::sleep_for(10ms);
+
         switch (_allocator_id)
         {
         case _malloc:
@@ -293,7 +371,8 @@ public:
 
             for (int i = 0; i < _num_of_threads; ++i)
             {
-                thread t{ &application::test,  this, std::ref(tcs[i]) };
+				int core = i % thread::hardware_concurrency();
+                thread t{ &application::test,  this, std::ref(tcs[i]), core };
                 threads[i] = move(t);
             }
 

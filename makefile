@@ -1,6 +1,6 @@
 TARGETDIR := ./build/$(shell $(CXX) -dumpmachine)
 
-CXXFLAGS += -Wall -pthread
+CXXFLAGS += -std=c++17 -Wall -pthread
 ifeq ($(DEBUG), 1)
 	CXXFLAGS += -g -D_DEBUG
 else
