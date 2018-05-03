@@ -1,6 +1,6 @@
 heapperf=build/$(gcc -dumpmachine)/heapperf
 
-for thread in 1 4 8 
+for thread in 1 2 4 8 
 do
     for heap in 0 1 
     do

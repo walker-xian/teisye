@@ -4,7 +4,7 @@ All projects that I had worked on, it was never rare to encounter and solve prob
 In 2017, I happened to know that VS2017 supports C++11 very well, specifically std::thread_local and std::atomic features, I started thinking to finish the work. 
 
 ## Design
-Teisye is dialect of Xian, China, which means “good”. Teisye assumes that same code path will be excuted over and over again during an application lifetime,  same size of allocation and deallocation will be requested repeatly, memory blocks of small size are requested most, then the medium size, then the large size, huge size is the least. Base on the assumption, teisye uses different strategies as shown below.
+Teisye is dialect of Xian, China, which means "good". Teisye assumes that same code path will be excuted over and over again during an application lifetime,  same size of allocation and deallocation will be requested repeatly, memory blocks of small size are requested most, then the medium size, then the large size, huge size is the least. Base on the assumption, teisye uses different strategies as shown below.
 ![](./img/teisye_design.jpg)
 
 <b>thread\_cache</b> uses a hash map to manage memory blocks of small size, each thread has one. The hash key is normalized size key, each hash slot uses teisye::stack to manage free memory blocks. teisye::stack is not a contianer, it requires each node to has a member named _next. Since concurrence does not happen in thread_cache, the performance of thread_cache is the best. When a slot of thread_cache is empty, teisye will ask shared_cache to allocate memory. When a thread exists, all slots will be merged into shared_cache.
@@ -32,9 +32,9 @@ heapperf uses <b>std::chrono::high\_resolution\_clock</b> to accumulate the cost
 5. <b>huge</b>: 128kb + 1b to 130kb allocations and deallocations, including 8 bytes header.
 
 Each case contains following items:  
-1. <b>AT</b>: average allocation time in nanoseconds.  
+1. <b>AT</b>: average allocation time in cycles on x86/x64, in nanoseconds on arm.  
 2. <b>AC</b>: total allocation count.   
-3. <b>DT</b>: average deallocation time in nanoseconds.  
+3. <b>DT</b>: average deallocation time in cycles x86/x64, in nanoseconds on arm.    
 4. <b>DC</b>: total deallocation count.
 
 Here is an example of heapperf report:  
@@ -50,7 +50,7 @@ Here is an example of heapperf report:
 	wc                89           19372              80           19370
 	512b              88            5050              78            5050
 	8kb               99           76800              82           76800
-	128kb            122           58510              89           58510
+	1mb              122           58510              89           58510
 	huge             345           20710             356           20710
 	
 
@@ -68,4 +68,6 @@ GCC 6.3 or above is required to build teisye on Linux. Specifies DEBUG=1 to make
     make SHARED=1 clean all
 
 ## Benchmarks
-All benchmarks are located in benchmarks directory. Each benchmark includes comparisons for 1 thread, 4 threads, 8 threads and memory usage, all data are collected from the fastest one of three heapperf runs.
+- [20180502-win7.md](benchmarks/20180502-win7.md)  
+- [20180502-ubuntu1604LTS.md](benchmarks/20180502-ubuntu1604LTS.md)  
+- [20180503-raspberrypi.md](benchmarks/20180503-raspberrypi.md)  
