@@ -71,3 +71,4 @@ GCC 6.3 or above is required to build teisye on Linux. Specifies DEBUG=1 to make
 - [20180502-win7.md](benchmarks/20180502-win7.md)  
 - [20180502-ubuntu1604LTS.md](benchmarks/20180502-ubuntu1604LTS.md)  
 - [20180503-raspberrypi.md](benchmarks/20180503-raspberrypi.md)  
+- [20180720-win10.md](benchmarks/20180720-win10.md)  
