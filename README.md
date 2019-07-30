@@ -73,4 +73,6 @@ GCC 6.3 or above is required to build teisye on Linux. Specifies DEBUG=1 to make
 - [20180503-raspberrypi.md](benchmarks/20180503-raspberrypi.md)  
 - [20180720-win10.md](benchmarks/20180720-win10.md)  
 - [20190608 HP ENVY Laptop 13-ah0012TX](benchmarks/20190608-win10.md)
-- 
+- [20190730 HP ENVY Laptop 13-ah0012TX v2.1.1](benchmarks/20190730-HPENVY-win10.md)
+
+
