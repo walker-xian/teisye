@@ -9,7 +9,7 @@ Teisye is dialect of Xian, China, which means "good". Teisye assumes that same c
 
 <b>thread\_cache</b> uses a hash map to manage memory blocks of small size, each thread has one. The hash key is normalized size key, each hash slot uses teisye::stack to manage free memory blocks. teisye::stack is not a contianer, it requires each node to has a member named _next. Since concurrence does not happen in thread_cache, the performance of thread_cache is the best. When a slot of thread_cache is empty, teisye will ask shared_cache to allocate memory. When a thread exists, all slots will be merged into shared_cache.
 
-<b>shared\_cache</b> is mainly for medium size memory allocations, it uses same data structure and algorithm as thread\_cache, except each slot uses teisye::stack\_sl or teisye::atomic\_stack\_v depends on processor. teisye::stack\_sl uses spin lock technique. teisye::atomic\_stack\_v uses sdk::atomic and versioning techniques for ABA problem, teisye::atomic\_stack\_v is lock free.
+<b>shared\_cache</b> is mainly for medium size memory allocations, it uses same data structure and algorithm as thread\_cache, except each slot uses teisye::stack\_sl or teisye::atomic\_stack\_2p depends on processor. teisye::stack\_sl uses spin lock technique. teisye::atomic\_stack\_2p compares head pointer and next pointer to address ABA problem, teisye::atomic\_stack\_2p is lock free.
 
 <b>heap\_large</b> is for large size memory allocations, it supports merging, uses std::atomic for lock free concurrence.
 
