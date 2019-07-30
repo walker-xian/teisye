@@ -178,66 +178,66 @@ public:
 };
 
 template<typename T>
-class atomic_stack_v
+class atomic_stack_2p
 {
     using node_t = T;
 
-    struct head_version
+    struct exchange_data
     {
-        node_t      _head;
-        uintptr_t   _version;
+        node_t  _head;
+        node_t  _head_next;
     };
 
-    atomic<head_version> _hv{};
+    atomic<exchange_data> _ed{};
 
 public:
     inline node_t top() noexcept
     {
-        return static_cast<head_version>(_hv)._head;
+        return static_cast<exchange_data>(_ed)._head;
     }
 
     inline void push(node_t node) noexcept
     {
-        head_version old_hv = _hv;
-        head_version new_hv;
+        exchange_data old_ed = _ed;
+        exchange_data new_ed;
 
-        new_hv._head = node;
+        new_ed._head = node;
         do
         {
-            node->_next = old_hv._head;
-            new_hv._version = old_hv._version + 1;
+            node->_next = old_ed._head;
+            new_ed._head_next = node->_next;
         }
-        while (!_hv.compare_exchange_weak(old_hv, new_hv));
+        while (!_ed.compare_exchange_weak(old_ed, new_ed));
     }
 
     inline void push(node_t head, node_t tail) noexcept
     {
-        head_version old_hv = _hv;
-        head_version new_hv;
+        exchange_data old_ed = _ed;
+        exchange_data new_ed;
 
-        new_hv._head = head;
+        new_ed._head = head;
         do
         {
-            tail->_next = old_hv._head;
-            new_hv._version = old_hv._version + 1;
+            tail->_next = old_ed._head;
+            new_ed._head_next = head->_next;
         }
-        while (!_hv.compare_exchange_weak(old_hv, new_hv));
+        while (!_ed.compare_exchange_weak(old_ed, new_ed));
     }
 
     inline node_t pop() noexcept
     {
-        head_version old_hv = _hv;
-        head_version new_hv;
+        exchange_data old_ed = _ed;
+        exchange_data new_ed;
         node_t head;
 
         do
         {
-            head = old_hv._head;
+            head = old_ed._head;
             if (!head) break;
-            new_hv._head = head->_next;
-            new_hv._version = old_hv._version + 1;
+            new_ed._head = old_ed._head_next;
+            new_ed._head_next = new_ed._head ? new_ed._head->_next : nullptr;
         }
-        while (!_hv.compare_exchange_weak(old_hv, new_hv));
+        while (!_ed.compare_exchange_weak(old_ed, new_ed));
 
         return head;
     }
@@ -595,7 +595,7 @@ class heap
         // gcc hasn't implemented atomic_compare_exchange_16 for x86-64 yet, use spin lock version instead
         heap_small<stack_sl<memory_unit*>>
 #else
-        heap_small<atomic_stack_v<memory_unit*>>
+        heap_small<atomic_stack_2p<memory_unit*>>
 #endif
     {
         inline void merge(key_t key, memory_unit* head) noexcept
