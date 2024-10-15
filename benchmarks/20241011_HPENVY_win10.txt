@@ -1,0 +1,104 @@
+allocator: malloc
+number of threads: 1
+number of loops: 3
+run duration(ms): 23850
+number of logic processors: 8
+peak working set(KB): 21548
+private usage(KB): 11712
+CASE              AT              AC              DT              DC
+wc               124           58112              78           58110
+512b             245           15150             182           15150
+8kb              257          230400             282          230400
+1mb             2913          241950           18590          241950
+huge               0               0               0               0
+allocator: tsalloc
+number of threads: 1
+number of loops: 3
+run duration(ms): 4172
+number of logic processors: 8
+peak working set(KB): 12432
+private usage(KB): 9948
+CASE              AT              AC              DT              DC
+wc                37           58112              35           58110
+512b              40           15150              36           15150
+8kb               83          230400              80          230400
+1mb              247          241950              77          241950
+huge               0               0               0               0
+allocator: malloc
+number of threads: 2
+number of loops: 3
+run duration(ms): 19805
+number of logic processors: 8
+peak working set(KB): 51824
+private usage(KB): 33908
+CASE              AT              AC              DT              DC
+wc               200          116222             120          116220
+512b             796           30300             265           30300
+8kb              331          460800             132          460800
+1mb             9604          483900           11279          483900
+huge               0               0               0               0
+allocator: tsalloc
+number of threads: 2
+number of loops: 3
+run duration(ms): 10522
+number of logic processors: 8
+peak working set(KB): 27344
+private usage(KB): 26396
+CASE              AT              AC              DT              DC
+wc                53          116222              45          116220
+512b              62           30300              50           30300
+8kb              108          460800             107          460800
+1mb              756          483900             185          483900
+huge               0               0               0               0
+allocator: malloc
+number of threads: 4
+number of loops: 3
+run duration(ms): 27599
+number of logic processors: 8
+peak working set(KB): 152636
+private usage(KB): 143604
+CASE              AT              AC              DT              DC
+wc               284          232442             146          232440
+512b            1024           60600             211           60600
+8kb              432          921600             151          921600
+1mb            21350          967800           13010          967800
+huge               0               0               0               0
+allocator: tsalloc
+number of threads: 4
+number of loops: 3
+run duration(ms): 19544
+number of logic processors: 8
+peak working set(KB): 44500
+private usage(KB): 42860
+CASE              AT              AC              DT              DC
+wc                77          232442              61          232440
+512b             105           60600              69           60600
+8kb              181          921600             180          921600
+1mb             1709          967800             340          967800
+huge               0               0               0               0
+allocator: malloc
+number of threads: 8
+number of loops: 3
+run duration(ms): 53060
+number of logic processors: 8
+peak working set(KB): 246936
+private usage(KB): 47092
+CASE              AT              AC              DT              DC
+wc               660          464882             326          464880
+512b            2239          121200             340          121200
+8kb              692         1843200             266         1843200
+1mb           101314         1935600           57164         1935600
+huge               0               0               0               0
+allocator: tsalloc
+number of threads: 8
+number of loops: 3
+run duration(ms): 43323
+number of logic processors: 8
+peak working set(KB): 75672
+private usage(KB): 74704
+CASE              AT              AC              DT              DC
+wc               122          464882              85          464880
+512b             177          121200              87          121200
+8kb              259         1843200             331         1843200
+1mb             3990         1935600             590         1935600
+huge               0               0               0               0
